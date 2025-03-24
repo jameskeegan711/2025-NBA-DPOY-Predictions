@@ -1,0 +1,544 @@
+---
+title: ""
+author: "James Keegan"
+date: "2025-03-03"
+output: html_document
+---
+
+# Loading Libraries
+
+```{R}
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(stats)
+library(ggplot2)
+library(corrplot)
+library(here)
+library(ggthemes)
+library(hoopR)
+library(rvest)
+library(dplyr)
+library(janitor)
+library(stringr)
+library(stringi)
+library(randomForest)
+
+```
+
+# DPOY Historical Data
+
+```{R}
+dpoy_data = read.csv("C:\\Users\\student\\Documents\\DSE 6620\\Module 7\\DPOY - Sheet1.csv")
+head(dpoy_data)
+
+```
+
+```{R}
+# Loading Game Stats from 2004-2024
+nba_players <- hoopR::load_nba_player_box(season = 2004:2024)
+
+advanced_stats <- nba_players %>%
+  filter(season_type == 2) %>%  
+  group_by(season, athlete_id, athlete_display_name) %>%  
+  summarise(
+    TS = sum(points, na.rm = TRUE) / (2 * (sum(field_goals_attempted, na.rm = TRUE) 
+                                           + 0.44 * sum(free_throws_attempted, na.rm = TRUE))), 
+    AST_TOV = sum(assists, na.rm = TRUE) / sum(turnovers, na.rm = TRUE) 
+  ) %>%
+  ungroup() %>%
+  arrange(desc(season), desc(TS))
+head(advanced_stats)
+
+
+```
+
+```{R}
+# Merging the two data frames
+merged_dpoy_data <- dpoy_data %>%
+  left_join(advanced_stats, by = c("Season" = "season", "Player" = "athlete_display_name")) %>%
+  rename(Pts_Won = Pts.Won, Pts_Max = Pts.Max, FG_Percent = FG., Percent_3 = X3P., FT_Percent = FT., WS_48 = WS.48) %>%
+  mutate_all(~replace(., . == "", ".000")) %>%
+  dplyr::select(-First, -Pts_Won, -Pts_Max, -Share)
+
+merged_dpoy_data$Rank = gsub("T", "", merged_dpoy_data$Rank)
+  
+print(merged_dpoy_data)
+
+```
+
+```{R}
+# Changing variable types from characters to numeric
+merged_dpoy_data = merged_dpoy_data %>%
+  mutate(Season = as.numeric(merged_dpoy_data$Season),
+         Rank = as.numeric(merged_dpoy_data$Rank),
+         Age = as.numeric(merged_dpoy_data$Age),
+         G = as.numeric(merged_dpoy_data$G),
+         MP = as.numeric(merged_dpoy_data$MP),
+         PTS = as.numeric(merged_dpoy_data$PTS),
+         TRB = as.numeric(merged_dpoy_data$TRB),
+         AST = as.numeric(merged_dpoy_data$AST),
+         STL = as.numeric(merged_dpoy_data$STL),
+         BLK = as.numeric(merged_dpoy_data$BLK),
+         FG_Percent = as.numeric(merged_dpoy_data$FG_Percent),
+         Percent_3 = as.numeric(merged_dpoy_data$Percent_3),
+         FT_Percent = as.numeric(merged_dpoy_data$FT_Percent),
+         WS = as.numeric(merged_dpoy_data$WS),
+         WS_48 = as.numeric(merged_dpoy_data$WS_48),
+         DWS = as.numeric(merged_dpoy_data$DWS),
+         DBPM = as.numeric(merged_dpoy_data$DBPM),
+         DRtg = as.numeric(merged_dpoy_data$DRtg),
+         TS = as.numeric(merged_dpoy_data$TS),
+         AST_TOV = as.numeric(merged_dpoy_data$AST_TOV)) %>%
+  filter(Rank <= 8)
+  
+merged_dpoy_data = na.omit(merged_dpoy_data)
+
+print(merged_dpoy_data)
+
+```
+
+# 2025 Top 8 DPOY Players Stats
+
+```{R}
+url_2025 <- "https://www.basketball-reference.com/leagues/NBA_2025_per_game.html"
+webpage <- read_html(url_2025)
+
+stats_2025 <- webpage %>%
+  html_nodes("table") %>%    
+  .[[1]] %>%
+  html_table(fill = TRUE)
+print(stats_2025)
+
+```
+
+```{R}
+stats_2025 <- stats_2025 %>%
+  mutate(Player = stri_trans_general(Player, "Latin-ASCII"))
+
+dpoy_players = c("Victor Wembanyama", "Evan Mobley", "Jaren Jackson Jr.", "Luguentz Dort", "Shai Gilgeous-Alexander", "Dyson Daniels", "Rudy Gobert", "Bam Adebayo")
+
+dpoy_players_stats = stats_2025 %>%
+  filter(Player %in% dpoy_players)
+
+print(dpoy_players_stats)
+
+```
+
+```{R}
+# Adding advanced stats to the basic stats data frame
+dpoy_advanced_stats = read.csv("C:\\Users\\student\\Documents\\DSE 6620\\Module 7\\DPOY Candidates Adv Stats - Sheet1.csv")
+
+dpoy_players_stats = dpoy_players_stats %>%
+  left_join(dpoy_advanced_stats, by = "Player")
+print(dpoy_players_stats)
+
+```
+
+# DPOY Cluster 1
+
+```{R}
+dpoy_train_data <- merged_dpoy_data %>% filter(Season != 2024)
+dpoy_validation <- merged_dpoy_data %>% filter(Season == 2024)
+
+```
+
+```{R}
+# Hierarchical Clustering
+dpoy_train.data <- as.matrix(dpoy_train_data[, c("STL", "BLK")])
+dpoy_data.scaled <- scale(dpoy_train.data)
+
+dpoy_data.dist <- dist(dpoy_data.scaled)
+dpoy_data.hclust <- hclust(d = dpoy_data.dist, method = "complete")
+plot(dpoy_data.hclust)
+abline(h = 4, lty = 2)
+
+```
+
+```{R}
+# Cluster Creation
+dpoy_data.hclust.clusters <- cutree(dpoy_data.hclust, k = 8)
+dpoy_data_clust <- data.frame(dpoy_data.hclust.clusters = as.character(dpoy_data.hclust.clusters))
+
+dpoy_cluster_summary <- dpoy_train_data %>%
+  bind_cols(dpoy_data_clust) %>%
+  group_by(dpoy_data.hclust.clusters) %>%
+  summarise(
+    STL = mean(STL),
+    BLK = mean(BLK),
+    count = n()
+  )
+
+print(dpoy_cluster_summary)
+
+```
+
+```{R}
+# Update clusters
+dpoy_data_updated <- dpoy_train_data %>%
+  bind_cols(dpoy_data_clust) %>%
+  mutate(dpoy_data.hclust.clusters = case_when(
+    dpoy_data.hclust.clusters == "7" ~ "1",
+    dpoy_data.hclust.clusters == "5" ~ "2",
+    dpoy_data.hclust.clusters == "4" ~ "3",
+    dpoy_data.hclust.clusters == "8" ~ "6",
+    TRUE ~ dpoy_data.hclust.clusters
+  ))
+
+dpoy_cluster_summary_updated <- dpoy_data_updated %>%
+  group_by(dpoy_data.hclust.clusters) %>%
+  summarise(
+    STL = mean(STL),
+    BLK = mean(BLK),
+    count = n()
+  )
+print(dpoy_cluster_summary_updated)
+
+```
+
+```{R}
+# Creating a new, descriptive column for each cluster and adding it to the historical data
+lookup <- tibble(
+  dpoy_type_index = as.character(1:6),
+  dpoy_types = c("High BLK & Low STL","Average BLK & Low STL","Low BLK & Average STL","","","High STL & Average BLK")
+)
+
+dpoy_data_final <- dpoy_data_updated %>%
+  inner_join(lookup, by = c("dpoy_data.hclust.clusters" = "dpoy_type_index"))
+
+print(dpoy_data_final)
+
+```
+
+# DPOY Cluster 2
+
+```{R}
+# Hierarchical Clustering
+dpoy_train_data_2 <- merged_dpoy_data %>% filter(Season < 2024)
+dpoy_validation_2 <- merged_dpoy_data %>% filter(Season >= 2024)
+
+dpoy_train.data_2 <- as.matrix(dpoy_train_data[, c("DWS", "DBPM", "DRtg")])
+dpoy_data.scaled_2 <- scale(dpoy_train.data_2)
+
+dpoy_data.dist_2 <- dist(dpoy_data.scaled_2)
+dpoy_data.hclust_2 <- hclust(d = dpoy_data.dist_2, method = "complete")
+plot(dpoy_data.hclust_2)
+abline(h = 4, lty = 2)
+
+```
+
+```{R}
+# Cluster Creation
+dpoy_data.hclust.clusters_2 <- cutree(dpoy_data.hclust_2, k = 6)
+dpoy_data_clust_2 <- data.frame(dpoy_data.hclust.clusters_2 = as.character(dpoy_data.hclust.clusters_2))
+
+dpoy_cluster_summary_2 <- dpoy_train_data_2 %>%
+  bind_cols(dpoy_data_clust_2) %>%
+  group_by(dpoy_data.hclust.clusters_2) %>%
+  summarise(
+    DWS = mean(DWS),
+    DBPM = mean(DBPM),
+    DRtg = mean(DRtg),
+    count = n()
+  )
+
+print(dpoy_cluster_summary_2)
+
+```
+
+```{R}
+# Update clusters
+dpoy_data_updated_2 <- dpoy_train_data_2 %>%
+  bind_cols(dpoy_data_clust_2) %>%
+  mutate(dpoy_data.hclust.clusters_2 = case_when(
+    dpoy_data.hclust.clusters_2 == "2" ~ "1",
+    dpoy_data.hclust.clusters_2 == "5" ~ "3",
+    TRUE ~ dpoy_data.hclust.clusters_2
+  ))
+
+dpoy_cluster_summary_updated_2 <- dpoy_data_updated_2 %>%
+  group_by(dpoy_data.hclust.clusters_2) %>%
+  summarise(
+    DWS = mean(DWS),
+    DBPM = mean(DBPM),
+    DRtg = mean(DRtg),
+    count = n()
+  )
+print(dpoy_cluster_summary_updated_2)
+
+```
+
+```{R}
+# Creating a new, descriptive column for each cluster and adding it to the historical data
+lookup <- tibble(
+  dpoy_type_index_2 = as.character(1:6),
+  dpoy_types_2 = c("Low DWS,DBPM & High DRtg", "", "Average DWS,DBPM,DRtg", "Average DWS,DRtg & Low DBPM", "", "High DWS,DBPM & Low DRtg")
+)
+
+dpoy_data_final_2 <- dpoy_data_updated_2 %>%
+  inner_join(lookup, by = c("dpoy_data.hclust.clusters_2" = "dpoy_type_index_2"))
+
+print(dpoy_data_final_2)
+
+```
+
+# DPOY Cluster 3
+
+```{R}
+# Hierarchical Clustering
+dpoy_train_data_3 <- merged_dpoy_data %>% filter(Season < 2024)
+dpoy_validation_3 <- merged_dpoy_data %>% filter(Season >= 2024)
+
+dpoy_train.data_3 <- as.matrix(dpoy_train_data[, c("WS", "WS_48")])
+dpoy_data.scaled_3 <- scale(dpoy_train.data_3)
+
+dpoy_data.dist_3 <- dist(dpoy_data.scaled_3)
+dpoy_data.hclust_3 <- hclust(d = dpoy_data.dist_3, method = "complete")
+plot(dpoy_data.hclust_3)
+abline(h = 4, lty = 2)
+
+```
+
+```{R}
+# Cluster Creation
+dpoy_data.hclust.clusters_3 <- cutree(dpoy_data.hclust_3, k = 6)
+dpoy_data_clust_3 <- data.frame(dpoy_data.hclust.clusters_3 = as.character(dpoy_data.hclust.clusters_3))
+
+dpoy_cluster_summary_3 <- dpoy_train_data_3 %>%
+  bind_cols(dpoy_data_clust_3) %>%
+  group_by(dpoy_data.hclust.clusters_3) %>%
+  summarise(
+    WS = mean(WS),
+    WS_48 = mean(WS_48),
+    count = n()
+  )
+
+print(dpoy_cluster_summary_3)
+
+```
+
+```{R}
+# Update clusters
+dpoy_data_updated_3 <- dpoy_train_data_3 %>%
+  bind_cols(dpoy_data_clust_3) %>%
+  mutate(dpoy_data.hclust.clusters_3 = case_when(
+    dpoy_data.hclust.clusters_3 == "3" ~ "1",
+    dpoy_data.hclust.clusters_3 == "5" ~ "2",
+    dpoy_data.hclust.clusters_3 == "6" ~ "4",
+    TRUE ~ dpoy_data.hclust.clusters_3
+  ))
+
+dpoy_cluster_summary_updated_3 <- dpoy_data_updated_3 %>%
+  group_by(dpoy_data.hclust.clusters_3) %>%
+  summarise(
+    WS = mean(WS),
+    WS_48 = mean(WS_48),
+    count = n()
+  )
+print(dpoy_cluster_summary_updated_3)
+
+```
+
+```{R}
+# Creating a new, descriptive column for each cluster and adding it to the historical data
+lookup <- tibble(
+  dpoy_type_index_3 = as.character(1:4),
+  dpoy_types_3 = c("Average WS,WS_48", "Low WS,WS_48", "", "High WS,WS_48")
+)
+
+dpoy_data_final_3 <- dpoy_data_updated_3 %>%
+  inner_join(lookup, by = c("dpoy_data.hclust.clusters_3" = "dpoy_type_index_3")) %>%
+
+print(dpoy_data_final_3)
+
+```
+
+# DPOY Model 1 Creation
+
+```{R}
+# Creating new data frame to run model
+dpoy_include_data = dpoy_data_final %>%
+  dplyr::select(Season, Rank, Age, G, MP, STL, BLK, dpoy_types)
+
+dpoy_include_data$dpoy_types = as.factor(dpoy_include_data$dpoy_types)
+
+# re-training the data
+lm_dpoy_train_data <- dpoy_include_data %>% filter(Season != 2023)
+lm_dpoy_validation <- dpoy_include_data %>% filter(Season == 2023)
+
+```
+
+```{R}
+dpoy_lm_model <- lm(Rank ~ ., data = lm_dpoy_train_data)
+summary(dpoy_lm_model)
+
+```
+
+```{R}
+# Calculating MSE
+dpoy_predictions <- predict(dpoy_lm_model, newdata = lm_dpoy_validation)
+
+dpoy_mse = mean((lm_dpoy_validation$Rank - dpoy_predictions)^2)
+print(dpoy_mse)
+
+```
+
+# DPOY Model 2 Creation
+
+```{R}
+# Creating new data frame to run model
+dpoy_include_data_2 = dpoy_data_final_2 %>%
+  dplyr::select(Season, Rank, Age, G, MP, DWS, DBPM, DRtg, dpoy_types_2)
+
+dpoy_include_data_2$dpoy_types_2 = as.factor(dpoy_include_data_2$dpoy_types_2)
+
+# re-training the data
+lm_dpoy_train_data_2 <- dpoy_include_data_2 %>% filter(Season != 2023)
+lm_dpoy_validation_2 <- dpoy_include_data_2 %>% filter(Season == 2023)
+
+```
+
+```{R}
+dpoy_lm_model_2 <- lm(Rank ~ ., data = lm_dpoy_train_data_2)
+summary(dpoy_lm_model_2)
+
+```
+
+```{R}
+# Calculating MSE
+dpoy_predictions_2 <- predict(dpoy_lm_model_2, newdata = lm_dpoy_validation_2)
+
+dpoy_mse_2 = mean((lm_dpoy_validation_2$Rank - dpoy_predictions_2)^2)
+print(dpoy_mse_2)
+
+```
+
+# DPOY Model 3 Creation
+
+```{R}
+# Creating new data frame to run model
+dpoy_include_data_3 = dpoy_data_final_3 %>%
+  dplyr::select(Season, Rank, Age, G, MP, WS, WS_48, dpoy_types_3)
+
+dpoy_include_data_3$dpoy_types_3 = as.factor(dpoy_include_data_3$dpoy_types_3)
+
+# re-training the data
+lm_dpoy_train_data_3 <- dpoy_include_data_3 %>% filter(Season != 2023)
+lm_dpoy_validation_3 <- dpoy_include_data_3 %>% filter(Season == 2023)
+
+```
+
+```{R}
+dpoy_lm_model_3 <- lm(Rank ~ ., data = lm_dpoy_train_data_3)
+summary(dpoy_lm_model_3)
+
+```
+
+```{R}
+# Calculating MSE
+dpoy_predictions_3 <- predict(dpoy_lm_model_3, newdata = lm_dpoy_validation_3)
+
+dpoy_mse_3 = mean((lm_dpoy_validation_3$Rank - dpoy_predictions_3)^2)
+print(dpoy_mse_3)
+
+```
+
+# Applying the 2025 Stats to Model
+
+```{R}
+updated_dpoy_players_stats = dpoy_players_stats %>%
+  mutate(
+    TS = PTS / (2 * (FGA + 0.44 * FTA)), 
+    AST_TOV = AST/TOV,
+    Season = 2025)
+updated_dpoy_players_stats
+
+```
+
+# Model 1 Creation
+
+```{R}
+# Preparing Data
+dpoy_players = updated_dpoy_players_stats %>%
+  dplyr::select(Season, Age, G, MP, STL, BLK)
+
+dpoy_player_type = c("High STL & Average BLK", "High BLK & Low STL", "Average BLK & Low STL", "Average BLK & Low STL", "Low BLK & Average STL", "High STL & Average BLK", "Average BLK & Low STL", "Low BLK & Average STL" )
+
+dpoy_players$dpoy_types = dpoy_player_type
+
+dpoy_players
+
+```
+
+```{R}
+# Predicting rank
+dpoy_predicted_ranks <- predict(dpoy_lm_model, newdata = dpoy_players)
+
+dpoy_players_stats$Predicted_Rank <- dpoy_predicted_ranks
+dpoy_players_stats
+
+```
+
+# Model 2 Creation
+
+```{R}
+# Preparing Data
+dpoy_players_2 = updated_dpoy_players_stats %>%
+  dplyr::select(Season, Age, G, MP, DWS, DBPM, DRtg)
+
+dpoy_player_type_2 = c("High DWS,DBPM & Low DRtg", "Average DWS,DBPM,DRtg", "Average DWS,DRtg & Low DBPM", "Low DWS,DBPM & High DRtg", "Low DWS,DBPM & High DRtg", "Low DWS,DBPM & High DRtg", "Average DWS,DRtg & Low DBPM", "Average DWS,DRtg & Low DBPM")
+
+dpoy_players_2$dpoy_types_2 = dpoy_player_type_2
+
+dpoy_players_2
+
+```
+
+```{R}
+# Predicting rank
+dpoy_predicted_ranks_2 <- predict(dpoy_lm_model_2, newdata = dpoy_players_2)
+
+dpoy_players_stats$Predicted_Rank_2 <- dpoy_predicted_ranks_2
+dpoy_players_stats
+
+```
+
+# Model 3 Creation and Final Weighted Average Rank
+
+```{R}
+# Preparing Data
+dpoy_players_3 = updated_dpoy_players_stats %>%
+  dplyr::select(Season, Age, G, MP, WS, WS_48)
+
+dpoy_player_type_3 = c("High WS,WS_48", "Low WS,WS_48", "Average WS,WS_48", "Average WS,WS_48", "Low WS,WS_48", "Low WS,WS_48", "Average WS,WS_48", "Low WS,WS_48")
+
+dpoy_players_3$dpoy_types_3 = dpoy_player_type_3
+
+dpoy_players_3
+
+```
+
+```{R}
+# Predicting rank
+dpoy_predicted_ranks_3 <- predict(dpoy_lm_model_3, newdata = dpoy_players_3)
+
+dpoy_players_stats$Predicted_Rank_3 <- dpoy_predicted_ranks_3
+
+# Setting weights based on MSE
+dpoy_weight = 1/dpoy_mse
+dpoy_weight_2 = 1/dpoy_mse_2
+dpoy_weight_3 = 1/dpoy_mse_3
+dpoy_total_weight = dpoy_weight + dpoy_weight_2 + dpoy_weight_3
+
+dpoy_normalized_weight = dpoy_weight / dpoy_total_weight
+dpoy_normalized_weight_2 = dpoy_weight_2 / dpoy_total_weight
+dpoy_normalized_weight_3 = dpoy_weight_3 / dpoy_total_weight
+
+# Applying weights to averages and finding a true weighted average
+dpoy_players_stats = dpoy_players_stats %>%
+  mutate(Average_Rank = (Predicted_Rank * dpoy_normalized_weight) + (Predicted_Rank_2 * dpoy_normalized_weight_2) + (Predicted_Rank_3 * dpoy_normalized_weight_3)) %>%
+  arrange(Average_Rank) %>%
+  dplyr::select(Player, Predicted_Rank, Predicted_Rank_2, Predicted_Rank_3, Average_Rank)
+dpoy_players_stats
+
+```
